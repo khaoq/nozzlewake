@@ -66,18 +66,40 @@ SECRET_SENTINEL = "***"
 
 # Common IPP media-type keywords. The dashboard swaps in whatever the printer
 # itself reports (media-type-supported) once it has probed it.
-MEDIA_TYPES = [
-    ("", "Printer default"),
-    ("stationery", "Plain paper"),
-    ("photographic-glossy", "Photo paper (glossy)"),
-    ("photographic-semi-gloss", "Photo paper (semi-gloss)"),
-    ("photographic-matte", "Photo paper (matte)"),
-    ("photographic", "Photo paper"),
-]
+# Friendly names for IPP media-type keywords; types that make Epson's two-black
+# printers use Photo Black are marked.
+_MEDIA_NAMES = {
+    "": "Printer default",
+    "stationery": "Plain paper",
+    "stationery-coated": "Plain paper (coated)",
+    "stationery-lightweight": "Plain paper (lightweight)",
+    "stationery-letterhead": "Letterhead",
+    "photographic": "Photo paper",
+    "photographic-glossy": "Photo paper (glossy)",
+    "photographic-high-gloss": "Photo paper (high gloss)",
+    "photographic-semi-gloss": "Photo paper (semi-gloss)",
+    "photographic-matte": "Photo paper (matte)",
+    "com.epson-luster": "Epson Luster photo paper",
+    "com.epson-velvet-fine-art": "Epson Velvet Fine Art",
+    "com.epson-thickpaper1": "Thick paper 1",
+    "com.epson-thickpaper2": "Thick paper 2",
+    "envelope": "Envelope",
+    "disc": "Disc (CD/DVD)",
+}
+MEDIA_LABELS = {k: v + (" \u00b7 Photo Black" if k in pbs_state.PHOTO_BLACK_TYPES else "")
+                for k, v in _MEDIA_NAMES.items()}
+# Shown until the printer reports its own list
+MEDIA_TYPES = [(k, MEDIA_LABELS[k]) for k in
+               ("", "stationery", "photographic-glossy", "photographic-high-gloss",
+                "photographic-semi-gloss", "photographic-matte")]
 MEDIA_TYPE_RE = re.compile(r"^[a-z0-9_.-]{0,64}$")
 HOST_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,253}[a-zA-Z0-9]$")
 PAPER_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
 UPLOAD_NAME_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$")
+PRESET_RE = re.compile(r"preset-[a-z0-9]+(?:-[a-z0-9]+){0,4}")
+PRESET_LABELS = {"et8500-plain": "ET-8500 page 1 · plain",
+                 "et8500-photo": "ET-8500 page 2 · Photo Black (A4)",
+                 "et8500-photo-4x6": "ET-8500 page 2 · Photo Black (4×6)"}
 MAX_JSON_BYTES = 64 * 1024
 
 # DNS-rebinding protection: only answer requests addressed to this server by IP,
@@ -111,7 +133,7 @@ def valid_test_image(img):
     """True if img names an existing preset or uploaded image (no paths)."""
     if not isinstance(img, str):
         return False
-    if re.fullmatch(r"preset-\d{1,3}", img):
+    if PRESET_RE.fullmatch(img):
         return os.path.isfile(f"{PRESETS_DIR}/{img}.png")
     if img.startswith("custom-") and UPLOAD_NAME_RE.fullmatch(img[7:]):
         return os.path.isfile(os.path.join(UPLOADS_DIR, img[7:]))
@@ -366,8 +388,11 @@ def get_available_presets():
         for f in sorted(os.listdir(PRESETS_DIR)):
             if f.endswith(".png") and f.startswith("preset-"):
                 name = f.replace(".png", "")
-                channels = name.split("-")[1]
-                presets.append({"id": name, "label": f"{channels}-colour", "file": f})
+                if not PRESET_RE.fullmatch(name):
+                    continue
+                rest = name[len("preset-"):]
+                label = PRESET_LABELS.get(rest, f"{rest}-colour" if rest.isdigit() else rest)
+                presets.append({"id": name, "label": label, "file": f})
     return presets
 
 def get_uploaded_images():
@@ -462,16 +487,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/healthz":
             self._json_response({"ok": True})
             return
-        if self.path == "/favicon.ico":
+        static = {"/favicon.ico": ("/app/favicon.ico", "image/x-icon")}.get(self.path.split("?", 1)[0])
+        if static:
             try:
-                with open("/app/favicon.ico", "rb") as f:
-                    ico = f.read()
+                with open(static[0], "rb") as f:
+                    data = f.read()
                 self.send_response(200)
-                self.send_header("Content-Type", "image/x-icon")
-                self.send_header("Content-Length", len(ico))
+                self.send_header("Content-Type", static[1])
+                self.send_header("Content-Length", len(data))
                 self.send_header("Cache-Control", "public, max-age=86400")
                 self.end_headers()
-                self.wfile.write(ico)
+                self.wfile.write(data)
             except FileNotFoundError:
                 self.send_error(404)
             return
@@ -1151,7 +1177,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 cur_media = p.get("media_type", "")
                 media_choices = list(MEDIA_TYPES)
                 if cur_media and cur_media not in [k for k, _ in media_choices]:
-                    media_choices.append((cur_media, cur_media))
+                    media_choices.append((cur_media, MEDIA_LABELS.get(cur_media, cur_media)))
                 media_options = "".join(
                     f'<option value="{html_mod.escape(k)}"{" selected" if k == cur_media else ""}>{html_mod.escape(v)}</option>'
                     for k, v in media_choices)
@@ -1163,6 +1189,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             <div class="conn-dot" id="conn-{p["id"]}" title="Checking connection..."></div>
             <div class="printer-name" id="name-{p["id"]}" ondblclick="startRename('{p["id"]}')"
                  title="Double-click to rename">{html_mod.escape(p["name"])}</div>
+            <button class="btn-icon edit" onclick="startRename('{p["id"]}')" title="Rename printer" aria-label="Rename printer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
             <span class="printer-ip">{html_mod.escape(p["ip"])}</span>
           </div>
           <div style="display:flex;gap:2px;">
@@ -1296,7 +1323,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
   .btn-icon {{ background: none; border: none; color: var(--faint); cursor: pointer;
               padding: 5px 7px; border-radius: 6px; transition: background 0.15s, color 0.15s; display: inline-flex; align-items: center; }}
   .btn-icon:hover {{ background: var(--surface-3); color: var(--bad); }}
-  .btn-icon.dup:hover {{ color: var(--accent); }}
+  .btn-icon.dup:hover, .btn-icon.edit:hover {{ color: var(--accent); }}
+  .btn-icon.edit {{ padding: 3px 5px; }}
+  .btn-icon.edit svg {{ width: 14px; height: 14px; }}
   .btn-icon svg {{ width: 16px; height: 16px; }}
 
   .printer-controls {{ display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }}
@@ -1360,6 +1389,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
   option {{ background: var(--surface-2); color: var(--text); }}
   input[type=number].input-sm {{ width: 72px; }}
   .select-sm {{ font-size: 0.82rem; max-width: 190px; }}
+  .select-sm.media-select {{ max-width: 320px; }}
+  select[id^="img-"] {{ max-width: 240px; }}
   input[type=checkbox] {{ accent-color: var(--accent); width: 15px; height: 15px; vertical-align: -2px; margin-right: 4px; }}
   input[type=file] {{ color: var(--muted); font: inherit; font-size: 0.82rem; }}
   input[type=file]::file-selector-button {{ background: var(--surface-2); color: var(--text); border: 1px solid var(--line);
@@ -1711,7 +1742,7 @@ function duplicatePrinter(id) {{
     else showToast(d.message || 'Could not duplicate printer', 'error');
   }});
 }}
-const MEDIA_LABELS = {json.dumps(dict(MEDIA_TYPES))};
+const MEDIA_LABELS = {json.dumps(MEDIA_LABELS)};
 function applyMediaTypes(id, supported) {{
   const sel = document.getElementById('media-' + id);
   if (!sel || !supported || !supported.length || sel.dataset.probed) return;

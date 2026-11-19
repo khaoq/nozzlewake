@@ -26,7 +26,8 @@ def stamp(src, dst, name, ip, model=""):
     info = "  |  ".join(parts)
 
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
+        # ~1/70 of the width: legible on full-resolution pages, still small on presets
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", max(9, w // 70))
     except OSError:
         font = ImageFont.load_default()
 

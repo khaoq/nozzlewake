@@ -158,7 +158,7 @@ fi
 resolve_image() {
     local img_id="$1"
     # Only plain names inside the presets/uploads folders, never a path.
-    if [[ "$img_id" =~ ^preset-[0-9]{1,3}$ ]]; then
+    if [[ "$img_id" =~ ^preset-[a-z0-9]+(-[a-z0-9]+){0,4}$ ]]; then
         local path="${PRESETS_DIR}/${img_id}.png"
         if [ -f "$path" ]; then echo "$path"; return; fi
     elif [[ "$img_id" =~ ^custom-[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$ ]]; then

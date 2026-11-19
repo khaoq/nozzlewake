@@ -60,7 +60,7 @@ def probe_printer(ip, connection="ipp", port=9100):
     media_match = re.search(r'media-type-supported\s*(?:\(.*?\))?\s*=\s*(.+)', output)
     if media_match:
         result["media_types"] = [m.strip().strip('"') for m in media_match.group(1).split(",")
-                                 if re.fullmatch(r'[a-z0-9_-]+', m.strip().strip('"'))]
+                                 if re.fullmatch(r'[a-z0-9_.-]+', m.strip().strip('"'))]
 
     # Parse ink levels
     names_match = re.search(r'marker-names\s*(?:\(.*?\))?\s*=\s*(.+)', output)
