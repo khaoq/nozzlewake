@@ -19,7 +19,7 @@
   </Overview>
   <Category>Productivity: Tools:</Category>
   <WebUI>http://[IP]:[PORT:8631]</WebUI>
-  <TemplateURL>https://github.com/khaoq/nozzlewake/blob/main/unraid-ca-template.xml</TemplateURL>
+  <TemplateURL>https://raw.githubusercontent.com/khaoq/nozzlewake/main/unraid-ca-template.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/khaoq/icons/main/nozzlewake.png</Icon>
   <Description>
     Keeps any network printer's print head healthy by automatically sending a small test print on a schedule. Prevents pigment ink clogs without wasting ink on full cleaning cycles. Supports multiple printers, auto-discovery, custom test images, and smart scheduling. Works with Canon imagePROGRAF, Epson SureColor, HP DesignJet, and other IPP Everywhere compatible printers.
