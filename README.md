@@ -120,11 +120,7 @@ Each channel has a **Test** button to verify your setup.
 - Printer powered on with paper loaded
 - Network access from Docker host to printer
 
-## License
-
-MIT
-
-### Checking what your printer reports
+## Checking what your printer reports
 
 To see whether your printer shares its job history (used by smart skip to notice prints from other devices), run inside the container:
 
@@ -140,4 +136,10 @@ If it lists recent jobs with times, smart skip will see prints from other device
 - The dashboard only answers to IP addresses, LAN-style hostnames and names in `ALLOWED_HOSTS`, which blocks DNS-rebinding attacks from websites. All changes also require a custom request header, so other sites can't submit forms to it.
 - Port 631 (CUPS) is read-only from the network: status pages and printer queries work, but printing, pausing, cancelling and admin are only possible from inside the container. If you don't use the CUPS status page you can leave port 631 unmapped.
 - Webhook and Home Assistant URLs may point at LAN addresses but not at the container itself or link-local/cloud-metadata addresses (also checked after DNS lookup), and redirects aren't followed.
+
+## License
+
+MIT
+
+
 
