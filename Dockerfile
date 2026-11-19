@@ -1,18 +1,20 @@
 ###############################################################################
-# print-blockage-stopper
+# NozzleWake (formerly print-blockage-stopper)
 #
 # All-in-one container that keeps any IPP-capable network printer's print head
 # healthy by sending a small test print on a schedule. Supports multiple
 # printers, mDNS discovery, custom test images, and a web dashboard.
 #
-# v2.1: Queue management, failed jobs cancelled, optional dashboard password
+# v2.2: Native Discord/Slack/ntfy webhooks, paper type per entry, interval schedules,
+#       real-use detection via the printer's job history, low-ink alerts
 ###############################################################################
 
 FROM debian:bookworm-slim
 
-LABEL maintainer="ahmed@abadr.net"
-LABEL description="Automated maintenance prints for any network printer (IPP Everywhere compatible)"
-LABEL org.opencontainers.image.source="https://github.com/ahmedbadr3/print-blockage-stopper"
+LABEL org.opencontainers.image.title="NozzleWake"
+LABEL org.opencontainers.image.description="Automated maintenance prints for any network printer (IPP Everywhere compatible). Based on ahmedbadr3/print-blockage-stopper."
+LABEL org.opencontainers.image.source="https://github.com/khaoq/nozzlewake"
+LABEL org.opencontainers.image.licenses="MIT"
 
 # ── Install packages ─────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -33,44 +35,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── CUPS configuration ───────────────────────────────────────
-COPY <<'CUPSD_CONF' /etc/cups/cupsd.conf
+# Read-only status is visible on the LAN (port 631); printing, pausing,
+# cancelling and admin are only allowed from inside the container.
+# The entrypoint re-applies this file on every start, so persisted /data/cups
+# configs from older versions are updated too.
+COPY <<'CUPSD_CONF' /app/cupsd.conf
 LogLevel warn
 MaxLogSize 1m
 Listen 0.0.0.0:631
 ServerAlias *
 DefaultEncryption Never
 WebInterface Yes
+Browsing No
+DefaultShared No
 
-# Status pages — read-only, accessible from LAN
 <Location />
   Order allow,deny
   Allow all
 </Location>
 
-# Job status — read-only from LAN
-<Location /jobs>
-  Order allow,deny
-  Allow all
-</Location>
-
-# Printer status — read-only from LAN
-<Location /printers>
-  Order allow,deny
-  Allow all
-</Location>
-
-# Admin — localhost only (container-internal)
 <Location /admin>
   Order allow,deny
   Allow localhost
 </Location>
 
-# Admin config — localhost only
 <Location /admin/conf>
-  Order allow,deny
-  Allow localhost
   AuthType Default
   Require user @SYSTEM
+  Order allow,deny
+  Allow localhost
 </Location>
 
 <Policy default>
@@ -79,23 +72,28 @@ WebInterface Yes
   SubscriptionPrivateAccess default
   SubscriptionPrivateValues default
 
-  <Limit Send-Document Send-URI Hold-Job Release-Job Restart-Job Purge-Jobs Set-Job-Attributes Create-Job-Subscription Renew-Subscription Cancel-Subscription Get-Notifications Reprocess-Job Cancel-Current-Job Suspend-Current-Job Resume-Job Cancel-My-Jobs Close-Job CUPS-Move-Job CUPS-Get-Document>
-    Order deny,allow
-    Allow localhost
+  # Status queries: anyone who can reach port 631
+  <Limit Get-Printer-Attributes Get-Jobs Get-Job-Attributes CUPS-Get-Printers CUPS-Get-Default CUPS-Get-Classes>
+    Order allow,deny
+    Allow all
   </Limit>
 
+  # Printer administration: root inside the container only
   <Limit CUPS-Add-Modify-Printer CUPS-Delete-Printer CUPS-Add-Modify-Class CUPS-Delete-Class CUPS-Set-Default>
     AuthType Default
     Require user @SYSTEM
-    Order deny,allow
+    Order allow,deny
     Allow localhost
   </Limit>
 
+  # Everything else (print, pause, cancel, accept/reject...): inside the container only
   <Limit All>
-    Order deny,allow
+    Order allow,deny
+    Allow localhost
   </Limit>
 </Policy>
 CUPSD_CONF
+RUN cp /app/cupsd.conf /etc/cups/cupsd.conf
 
 # ── Create app directories ───────────────────────────────────
 RUN mkdir -p /app /app/presets /data/logs /data/uploads
@@ -109,6 +107,9 @@ COPY scripts/webui.py /app/webui.py
 COPY scripts/printer_probe.py /app/printer_probe.py
 COPY scripts/stamp_image.py /app/stamp_image.py
 COPY scripts/notify.py /app/notify.py
+COPY scripts/pbs_state.py /app/pbs_state.py
+COPY scripts/ipp_client.py /app/ipp_client.py
+COPY scripts/ink-check.py /app/ink-check.py
 COPY favicon.ico /app/favicon.ico
 
 RUN chmod +x /app/entrypoint.sh /app/auto-print.sh
@@ -129,6 +130,7 @@ VOLUME ["/data"]
 # SKIP_HOURS:    Default skip-if-recently-printed window (hours)
 # WEBHOOK_URL:   (Optional) URL for success/failure notifications
 # DASHBOARD_PASSWORD: (Optional) Require this password for the dashboard/API
+# ALLOWED_HOSTS: Extra hostnames the dashboard answers to (e.g. behind a reverse proxy)
 # JOB_TIMEOUT:   Seconds to wait for a print to complete before cancelling it
 # FAILURE_ALERT_THRESHOLD: Alert once this many runs in a row have failed
 ENV PRINTER_IP="" \
@@ -139,6 +141,7 @@ ENV PRINTER_IP="" \
     SKIP_HOURS="72" \
     WEBHOOK_URL="" \
     DASHBOARD_PASSWORD="" \
+    ALLOWED_HOSTS="" \
     JOB_TIMEOUT="600" \
     FAILURE_ALERT_THRESHOLD="2"
 

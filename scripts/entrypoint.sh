@@ -50,8 +50,8 @@ if ! echo "$SCHEDULE" | grep -qE '^[0-9\*\/,\-]+[[:space:]]+[0-9\*\/,\-]+[[:spac
 fi
 
 # Validate SKIP_HOURS
-if ! echo "$SKIP_HOURS" | grep -qE '^[0-9]{1,3}$' || [ "$SKIP_HOURS" -lt 1 ] || [ "$SKIP_HOURS" -gt 720 ]; then
-    log "ERROR: SKIP_HOURS must be 1-720. Got: $SKIP_HOURS"
+if ! echo "$SKIP_HOURS" | grep -qE '^[0-9]{1,4}$' || [ "$SKIP_HOURS" -gt 8760 ]; then
+    log "ERROR: SKIP_HOURS must be 0-8760 (0 = never skip). Got: $SKIP_HOURS"
     exit 1
 fi
 
@@ -63,7 +63,13 @@ log "Paper size:       $PAPER_SIZE"
 PRINTERS_FILE="/data/printers.json"
 if [ ! -f "$PRINTERS_FILE" ]; then
     log "Creating printers.json..."
-    echo "{\"printers\": [], \"global\": {\"schedule\": \"$SCHEDULE\", \"skip_hours\": $SKIP_HOURS, \"webhook_url\": \"$WEBHOOK_URL\"}}" > "$PRINTERS_FILE"
+    echo "{\"printers\": [], \"global\": {\"schedule\": \"$SCHEDULE\", \"skip_hours\": $SKIP_HOURS, \"webhook_url\": \"\"}}" > "$PRINTERS_FILE"
+fi
+
+# ── Apply the image's CUPS policy (also over configs persisted in /data/cups) ──
+cp /app/cupsd.conf /etc/cups/cupsd.conf 2>/dev/null || true
+if [ -d /data/cups ] && [ ! -L /data/cups ]; then
+    cp /app/cupsd.conf /data/cups/cupsd.conf 2>/dev/null || true
 fi
 
 # ── Start CUPS ──────────────────────────────────────────────────
@@ -110,7 +116,8 @@ print(any(p['ip'] == os.environ['CHECK_IP'] for p in data.get('printers', [])))
                 -L "Network" \
                 -D "Printer at $PRINTER_IP" \
                 -o media="$PAPER_SIZE" \
-                -o printer-error-policy=abort-job 2>/dev/null || true
+                -o printer-error-policy=abort-job \
+                -o printer-is-shared=false 2>/dev/null || true
 
             cupsaccept "$CUPS_NAME" 2>/dev/null || true
             cupsenable "$CUPS_NAME" 2>/dev/null || true
@@ -178,7 +185,7 @@ for p in data.get('printers', []):
     try:
         subprocess.run(['lpadmin', '-p', cups_name, '-v', uri, '-m', 'everywhere',
                         '-L', 'Network', '-D', p.get('name', cups_name),
-                        '-o', f'media={paper}', '-o', 'printer-error-policy=abort-job'], check=True, capture_output=True, timeout=15)
+                        '-o', f'media={paper}', '-o', 'printer-error-policy=abort-job', '-o', 'printer-is-shared=false'], check=True, capture_output=True, timeout=15)
         subprocess.run(['cupsaccept', cups_name], capture_output=True, timeout=5)
         subprocess.run(['cupsenable', cups_name], capture_output=True, timeout=5)
         print(f'  Registered: {cups_name} -> {uri}')
@@ -186,40 +193,33 @@ for p in data.get('printers', []):
         print(f'  FAILED: {cups_name} -> {e}')
 " 2>/dev/null || true
 
-# ── Install cron schedules (one line per non-paused printer) ─────
+# ── Install cron schedules ───────────────────────────────────────
+# Older configs store cron expressions like "0 10 */5 * *", which bunch up at
+# month ends; convert them to "every N days" (checked daily) first.
 log "Installing cron schedules..."
-PBS_PRINTERS_FILE="$PRINTERS_FILE" PBS_DEFAULT_SCHEDULE="$SCHEDULE" python3 -c "
-import json, subprocess, os
-data = json.load(open(os.environ['PBS_PRINTERS_FILE']))
-default_sched = os.environ.get('PBS_DEFAULT_SCHEDULE', '0 10 */3 * *')
-lines = []
-for p in data.get('printers', []):
-    if not p.get('paused', False):
-        sched = p.get('schedule', default_sched)
-        pid = p['id']
-        lines.append(f'{sched} . /etc/environment; /app/auto-print.sh --printer-id={pid} >> /data/logs/cron.log 2>&1')
-cron = '\n'.join(lines) + '\n' if lines else ''
-subprocess.run(['crontab', '-'], input=cron.encode(), capture_output=True)
-num = len(lines)
-print(f'  {num} cron job(s) installed')
-" 2>/dev/null || true
+python3 /app/pbs_state.py migrate || true
+python3 /app/pbs_state.py crontab || true
 
 # ── Start cron ──────────────────────────────────────────────────
 log "Starting cron daemon..."
 cron
 
-# ── Export WEBHOOK_URL from config (for cron jobs) ────────────────
-WEBHOOK_URL_FROM_CONFIG=$(PBS_PRINTERS_FILE="$PRINTERS_FILE" python3 -c "
+# ── WEBHOOK_URL env var → printers.json (if none saved yet) ───────
+# notify.py reads the webhook from printers.json, so it is never written to
+# /etc/environment (which cron sources as shell code).
+if [ -n "$WEBHOOK_URL" ]; then
+    PBS_PRINTERS_FILE="$PRINTERS_FILE" python3 -c "
 import json, os
-data = json.load(open(os.environ['PBS_PRINTERS_FILE']))
-print(data.get('global', {}).get('webhook_url', ''))
-" 2>/dev/null) || WEBHOOK_URL_FROM_CONFIG=""
+path = os.environ['PBS_PRINTERS_FILE']
+data = json.load(open(path))
+g = data.setdefault('global', {})
+if not g.get('webhook_url'):
+    g['webhook_url'] = os.environ['WEBHOOK_URL'].strip()
+    json.dump(data, open(path, 'w'), indent=2)
+" 2>/dev/null || true
+fi
+sed -i '/^WEBHOOK_URL=/d' /etc/environment 2>/dev/null || true
 
-# Prefer config file value, fall back to env var
-export WEBHOOK_URL="${WEBHOOK_URL_FROM_CONFIG:-$WEBHOOK_URL}"
-
-# Write to /etc/environment so cron jobs inherit it
-echo "WEBHOOK_URL=\"$WEBHOOK_URL\"" >> /etc/environment
 echo "JOB_TIMEOUT=\"${JOB_TIMEOUT:-600}\"" >> /etc/environment
 echo "FAILURE_ALERT_THRESHOLD=\"${FAILURE_ALERT_THRESHOLD:-2}\"" >> /etc/environment
 
@@ -231,7 +231,7 @@ python3 /app/webui.py &
 NUM_PRINTERS=$(PBS_PRINTERS_FILE="$PRINTERS_FILE" python3 -c "import json, os; print(len(json.load(open(os.environ['PBS_PRINTERS_FILE'])).get('printers',[])))" 2>/dev/null) || NUM_PRINTERS=0
 
 log "============================================================"
-log " print-blockage-stopper v2.1.0 is running"
+log " NozzleWake v2.2.0 is running"
 log " Dashboard:  http://localhost:8631"
 log " CUPS UI:    http://localhost:631"
 log " Printers:   $NUM_PRINTERS configured"

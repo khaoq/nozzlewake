@@ -22,6 +22,7 @@ def probe_printer(ip, connection="ipp", port=9100):
         "reachable": False,
         "model": None,
         "ink_levels": [],
+        "media_types": [],
         "error": None,
     }
 
@@ -42,7 +43,7 @@ def probe_printer(ip, connection="ipp", port=9100):
     try:
         proc = subprocess.run(
             ["ipptool", "-tv", ipp_uri, "-d", "URI=" + ipp_uri, "/dev/stdin"],
-            input='{\n  OPERATION Get-Printer-Attributes\n  GROUP operation-attributes-tag\n  ATTR charset attributes-charset utf-8\n  ATTR naturalLanguage attributes-natural-language en\n  ATTR uri printer-uri $URI\n  ATTR keyword requested-attributes printer-make-and-model,marker-names,marker-levels,marker-colors,printer-state\n}\n',
+            input='{\n  OPERATION Get-Printer-Attributes\n  GROUP operation-attributes-tag\n  ATTR charset attributes-charset utf-8\n  ATTR naturalLanguage attributes-natural-language en\n  ATTR uri printer-uri $URI\n  ATTR keyword requested-attributes printer-make-and-model,marker-names,marker-levels,marker-colors,printer-state,media-type-supported\n}\n',
             capture_output=True, text=True, timeout=10
         )
         output = proc.stdout + proc.stderr
@@ -54,6 +55,12 @@ def probe_printer(ip, connection="ipp", port=9100):
     model_match = re.search(r'printer-make-and-model\s*(?:\(.*?\))?\s*=\s*(.+)', output)
     if model_match:
         result["model"] = model_match.group(1).strip().strip('"')
+
+    # Paper types the printer accepts (IPP media-type keywords)
+    media_match = re.search(r'media-type-supported\s*(?:\(.*?\))?\s*=\s*(.+)', output)
+    if media_match:
+        result["media_types"] = [m.strip().strip('"') for m in media_match.group(1).split(",")
+                                 if re.fullmatch(r'[a-z0-9_-]+', m.strip().strip('"'))]
 
     # Parse ink levels
     names_match = re.search(r'marker-names\s*(?:\(.*?\))?\s*=\s*(.+)', output)

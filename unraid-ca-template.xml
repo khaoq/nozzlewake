@@ -1,37 +1,42 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>print-blockage-stopper</Name>
-  <Repository>abadrdh/print-blockage-stopper</Repository>
-  <Registry>https://hub.docker.com/r/abadrdh/print-blockage-stopper</Registry>
+  <Name>NozzleWake</Name>
+  <Repository>ghcr.io/khaoq/nozzlewake:latest</Repository>
+  <Registry>https://github.com/khaoq/nozzlewake/pkgs/container/nozzlewake</Registry>
   <Branch>
     <Tag>latest</Tag>
-    <TagDescription>Latest stable release</TagDescription>
+    <TagDescription>Latest build of the main branch</TagDescription>
   </Branch>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
   <ExtraParams>--cap-drop=ALL --cap-add=DAC_OVERRIDE --cap-add=CHOWN --cap-add=FOWNER --cap-add=SETUID --cap-add=SETGID --security-opt=no-new-privileges</ExtraParams>
-  <Support>https://forums.unraid.net/topic/197898-support-print-blockage-stopper-automated-print-head-maintenance/</Support>
-  <Project>https://github.com/ahmedbadr3/print-blockage-stopper</Project>
+  <Support>https://github.com/khaoq/nozzlewake/issues</Support>
+  <Project>https://github.com/khaoq/nozzlewake</Project>
   <Overview>
-    Automated maintenance prints for any network printer (especially pigment printers like Canon imagePROGRAF, Epson SureColor, HP DesignJet, etc.).
+    NozzleWake keeps inkjet print heads from clogging by sending a small maintenance print on a schedule (based on print-blockage-stopper by ahmedbadr3).
 
-    Sends a small test image on a configurable schedule (default: every 3 days) to keep all ink channels flowing and prevent costly pigment clogs and cleaning cycles.
-
-    Features: multi-printer support, network printer discovery, per-printer schedules, smart skip (won't print if the printer was recently used), preset test images for 4/6/8/11/12-colour printers, custom image upload, notifications (webhook, email, Home Assistant), and a built-in dashboard.
+    Features: multiple printers (the same printer can be added twice, e.g. plain and photo paper to exercise both blacks on Epson printers), "every N days" schedules counted from the last print, smart skip when the printer was recently used (including prints from other devices), low-ink alerts, Discord/Slack/ntfy webhooks, email and Home Assistant notifications, and a built-in dashboard.
   </Overview>
   <Category>Productivity: Tools:</Category>
   <WebUI>http://[IP]:[PORT:8631]</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/ahmedbadr3/unraid-templates/main/print-blockage-stopper.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/ahmedbadr3/print-blockage-stopper/main/icon.png</Icon>
+  <TemplateURL></TemplateURL>
+  <Icon>https://raw.githubusercontent.com/khaoq/icons/main/nozzlewake.png</Icon>
   <Description>
     Keeps any network printer's print head healthy by automatically sending a small test print on a schedule. Prevents pigment ink clogs without wasting ink on full cleaning cycles. Supports multiple printers, auto-discovery, custom test images, and smart scheduling. Works with Canon imagePROGRAF, Epson SureColor, HP DesignJet, and other IPP Everywhere compatible printers.
   </Description>
   <DateInstalled></DateInstalled>
-  <DonateText>Buy me a coffee</DonateText>
-  <DonateLink></DonateLink>
   <Requires>Any network printer with IPP Everywhere support (usually any modern networked printer). Especially useful for pigment printers.</Requires>
   <Beta>false</Beta>
   <Changes>
+    ### 2.2.0 (NozzleWake)
+    - Renamed to NozzleWake; image now ghcr.io/khaoq/nozzlewake
+    - Webhooks work with Discord, Slack and ntfy directly (no proxy needed); several URLs supported; real errors shown by the Test button and in the log
+    - Same printer can be added more than once; per-entry paper type (plain vs photo paper selects Matte vs Photo Black on Epson)
+    - "Every N days" schedules counted from the last maintenance; no more back-to-back prints at month ends; failed runs retried next day
+    - Smart skip uses the printer's own job history (prints from other devices) and matches plain vs photo paper
+    - "Problems only" notification mode and low-ink alerts
+    - Dark cyan dashboard theme and new icon
+    - Security: fixed command injection via schedule, file read via test image, DNS rebinding, LAN access to CUPS printing/pausing, webhook SSRF and discovery-name XSS. New ALLOWED_HOSTS setting for access through a domain name
     ### 2.1.0
     - Security: /api/printers no longer returns the SMTP password, Home Assistant token or webhook URL. If you ran an earlier version with any of these set, rotate them
     - Optional dashboard password (DASHBOARD_PASSWORD) protecting the dashboard and API
@@ -196,6 +201,16 @@
     Mask="true"></Config>
 
   <Config
+    Name="Allowed Hostnames"
+    Target="ALLOWED_HOSTS"
+    Default=""
+    Description="(Optional) Only needed if you open the dashboard through a domain name, e.g. via a reverse proxy: comma-separated names such as printers.example.com (a leading dot allows subdomains). IP addresses, single-word names (tower) and .local/.lan/.home.arpa names always work. Protects against DNS-rebinding attacks from websites."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
     Name="Job Timeout (seconds)"
     Target="JOB_TIMEOUT"
     Default="600"
@@ -219,12 +234,12 @@
   <Config
     Name="Data / Logs"
     Target="/data"
-    Default="/mnt/user/appdata/print-blockage-stopper"
+    Default="/mnt/user/appdata/nozzlewake"
     Description="Persistent storage for printer config, logs, uploads, and CUPS state."
     Type="Path"
     Display="always"
     Required="true"
-    Mask="false">/mnt/user/appdata/print-blockage-stopper</Config>
+    Mask="false">/mnt/user/appdata/nozzlewake</Config>
 
   <Config
     Name="Unraid Notifications"

@@ -258,7 +258,7 @@ def generate_preset(name, channel_names):
     # Footer
     draw.text(
         (MARGIN, total_h - MARGIN - 10),
-        "print-blockage-stopper — low-ink maintenance print",
+        "NozzleWake — low-ink maintenance print",
         fill=(180, 180, 180),
         font=font_tiny
     )

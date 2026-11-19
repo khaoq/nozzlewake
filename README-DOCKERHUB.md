@@ -1,4 +1,6 @@
-# print-blockage-stopper
+# NozzleWake
+
+*Based on [print-blockage-stopper](https://github.com/ahmedbadr3/print-blockage-stopper) by ahmedbadr3 (MIT).*
 
 Automated maintenance prints for **any network printer** (IPP Everywhere compatible). Especially useful for large-format pigment printers like Canon imagePROGRAF, Epson SureColor, and HP DesignJet.
 
@@ -31,11 +33,11 @@ Pigment printers—especially wide-format models—clog when they sit idle. This
 
 ```bash
 docker run -d \
-  --name print-blockage-stopper \
+  --name nozzlewake \
   -p 8631:8631 \
   -p 631:631 \
   -v /path/to/data:/data \
-  abadrdh/print-blockage-stopper
+  ghcr.io/khaoq/nozzlewake
 ```
 
 Then open **http://YOUR_HOST:8631** and add your printers from the dashboard.
@@ -44,19 +46,19 @@ Then open **http://YOUR_HOST:8631** and add your printers from the dashboard.
 
 ```bash
 docker run -d \
-  --name print-blockage-stopper \
+  --name nozzlewake \
   -e PRINTER_IP=192.168.1.50 \
   -e SCHEDULE="0 10 */3 * *" \
   -e PAPER_SIZE=A4 \
   -p 8631:8631 \
   -p 631:631 \
-  -v /mnt/user/appdata/print-blockage-stopper:/data \
-  abadrdh/print-blockage-stopper
+  -v /mnt/user/appdata/nozzlewake:/data \
+  ghcr.io/khaoq/nozzlewake
 ```
 
 ### Unraid users
 
-Search for **print-blockage-stopper** in Community Applications and click Install.
+Add the template from this repo (`unraid-ca-template.xml`): copy it to `/boot/config/plugins/dockerMan/templates-user/my-NozzleWake.xml` on the Unraid flash drive, then **Docker → Add Container → Template: NozzleWake**.
 
 ## Configuration
 
@@ -71,7 +73,8 @@ All settings are optional — printers can be added entirely from the dashboard.
 | `CONNECTION` | `ipp` | Connection type: `ipp` or `socket` |
 | `PRINTER_PORT` | `9100` | Socket port (only with `CONNECTION=socket`) |
 | `WEBHOOK_URL` | *(empty)* | URL for success/failure notifications (Slack, Discord, ntfy) |
-| `DASHBOARD_PASSWORD` | *(empty)* | If set, the dashboard and API require this password (HTTP Basic auth, any username) |
+| `DASHBOARD_PASSWORD` | *(empty)* | If set, the dashboard and API require this password (HTTP Basic auth, any username). Recommended |
+| `ALLOWED_HOSTS` | *(empty)* | Extra hostnames the dashboard answers to, comma separated (e.g. `printers.example.com`, or `.example.com` for subdomains). Needed only when using a domain name, such as behind a reverse proxy; IPs, single-word and `.local`/`.lan`/`.home.arpa` names always work. `*` turns the check off |
 | `JOB_TIMEOUT` | `600` | Seconds to wait for a print to complete before cancelling it |
 | `FAILURE_ALERT_THRESHOLD` | `2` | Alert once this many runs in a row have failed |
 

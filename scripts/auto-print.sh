@@ -24,6 +24,7 @@ JOB_TIMEOUT="${JOB_TIMEOUT:-600}"
 FAILURE_ALERT_THRESHOLD="${FAILURE_ALERT_THRESHOLD:-2}"
 [[ "$JOB_TIMEOUT" =~ ^[0-9]+$ ]] || JOB_TIMEOUT=600
 [[ "$FAILURE_ALERT_THRESHOLD" =~ ^[0-9]+$ ]] || FAILURE_ALERT_THRESHOLD=2
+export JOB_TIMEOUT
 
 FORCE=false
 PRINTER_ID=""
@@ -59,46 +60,12 @@ log() {
     echo "$msg" >> "$LOG_FILE"
 }
 
-write_status() {
-    local status="$1" message="$2"
-    local status_file="/data/status-${PRINTER_ID}.json"
-    cat > "$status_file" <<JSON
-{"status":"${status}","message":"${message}","timestamp":"$(timestamp)","printer_id":"${PRINTER_ID}"}
-JSON
-}
+STATE="python3 /app/pbs_state.py"
 
-write_history() {
-    local result="$1" message="$2"
-    echo "{\"timestamp\":\"$(timestamp)\",\"epoch\":$(epoch_now),\"result\":\"${result}\",\"message\":\"${message}\",\"printer_id\":\"${PRINTER_ID}\"}" >> "$HISTORY_FILE"
-    # Keep last 200 entries (more printers = more entries)
-    if [ -f "$HISTORY_FILE" ] && [ "$(wc -l < "$HISTORY_FILE")" -gt 200 ]; then
-        tail -n 200 "$HISTORY_FILE" > "${HISTORY_FILE}.tmp" && mv "${HISTORY_FILE}.tmp" "$HISTORY_FILE"
-    fi
-}
-
-# Number of consecutive failed runs for this printer, newest first
-# ("skipped" runs neither break nor extend the streak).
-failure_streak() {
-    PBS_HISTORY_FILE="$HISTORY_FILE" PBS_PRINTER_ID="$PRINTER_ID" python3 -c "
-import json, os
-streak = 0
-try:
-    lines = open(os.environ['PBS_HISTORY_FILE']).read().splitlines()
-except FileNotFoundError:
-    lines = []
-for line in reversed(lines):
-    try:
-        e = json.loads(line)
-    except ValueError:
-        continue
-    if e.get('printer_id') != os.environ['PBS_PRINTER_ID'] or e.get('result') == 'skipped':
-        continue
-    if e.get('result') != 'error':
-        break
-    streak += 1
-print(streak)
-" 2>/dev/null || echo 0
-}
+write_status() { $STATE status "$PRINTER_ID" "$1" "$2" || true; }
+write_history() { $STATE history "$PRINTER_ID" "$1" "$2" || true; }
+failure_streak() { $STATE streak "$PRINTER_ID" 2>/dev/null || echo 0; }
+mark_maintained() { $STATE mark "$PRINTER_ID" "$1" "${2:-}" "$MEDIA_TYPE" || true; }
 
 notify_unraid() {
     local subject="$1" description="$2" severity="${3:-warning}"
@@ -109,20 +76,21 @@ notify_unraid() {
 }
 
 # Record a failed run. Alerts are held until FAILURE_ALERT_THRESHOLD runs in a
-# row have failed, so a single blip doesn't page anyone.
+# row have failed, so a single blip doesn't page anyone. Failed runs are retried
+# daily, so after that first alert only every 7th further failure re-alerts.
 #   fail <status message> <history message> <notify event> <notify message>
 fail() {
     write_status "error" "$1"
     write_history "error" "$2"
     local streak
     streak=$(failure_streak)
-    if [ "$streak" -ge "$FAILURE_ALERT_THRESHOLD" ]; then
+    if [ "$streak" -ge "$FAILURE_ALERT_THRESHOLD" ] && [ $(( (streak - FAILURE_ALERT_THRESHOLD) % 7 )) -eq 0 ]; then
         notify_unraid "Print FAILED — $PRINTER_NAME" "$4 ($streak failed runs in a row)"
         python3 /app/notify.py --event "$3" \
             --printer "$PRINTER_NAME" --printer-id "$PRINTER_ID" \
-            --message "$4 ($streak failed runs in a row)" 2>/dev/null || true
+            --message "$4 ($streak failed runs in a row)" 2>>"$LOG_FILE" || true
     else
-        log "Failure $streak of $FAILURE_ALERT_THRESHOLD before alerting."
+        log "Failure $streak (alerts at $FAILURE_ALERT_THRESHOLD, then every 7th)."
     fi
 }
 
@@ -165,18 +133,35 @@ fields = {
     'TEST_IMAGE_ID': p.get('test_image', 'preset-11'),
     'CONNECTION': p.get('connection', 'ipp'),
     'SOCKET_PORT': str(p.get('port', 9100)),
+    'MEDIA_TYPE': p.get('media_type', ''),
 }
 for k, v in fields.items():
     print(f'{k}={shlex.quote(v)}')
 ")"
 
+# ── Check if scheduling is paused ────────────────────────────────
+if [ "$FORCE" = false ] && [ "$IS_PAUSED" = "True" ]; then
+    log "Schedule is PAUSED — skipping. Use dashboard to resume."
+    exit 0
+fi
+
+# ── Due? (cron fires daily; print only once the interval has passed) ──
+if [ "$FORCE" = false ]; then
+    if ! DUE_REASON=$($STATE due "$PRINTER_ID" 2>&1); then
+        # Not logged to the dashboard log: this happens on most days.
+        echo "[$(timestamp)] [$PRINTER_ID] Not due: $DUE_REASON"
+        exit 0
+    fi
+fi
+
 # Resolve test image path
 resolve_image() {
     local img_id="$1"
-    if [[ "$img_id" == preset-* ]]; then
+    # Only plain names inside the presets/uploads folders, never a path.
+    if [[ "$img_id" =~ ^preset-[0-9]{1,3}$ ]]; then
         local path="${PRESETS_DIR}/${img_id}.png"
         if [ -f "$path" ]; then echo "$path"; return; fi
-    elif [[ "$img_id" == custom-* ]]; then
+    elif [[ "$img_id" =~ ^custom-[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$ ]]; then
         local filename="${img_id#custom-}"
         local path="${UPLOADS_DIR}/${filename}"
         if [ -f "$path" ]; then echo "$path"; return; fi
@@ -188,6 +173,12 @@ resolve_image() {
 
 IMAGE_ORIG=$(resolve_image "$TEST_IMAGE_ID")
 
+# Paper type (IPP media-type keyword). Epson printers pick the black ink from it:
+# plain paper -> Matte Black, photo paper -> Photo Black.
+[[ "$MEDIA_TYPE" =~ ^[a-z0-9_-]*$ ]] || MEDIA_TYPE=""
+MEDIA_OPTS=()
+[ -n "$MEDIA_TYPE" ] && MEDIA_OPTS=(-o "media-type=$MEDIA_TYPE")
+
 # Stamp printer info onto a temp copy of the image
 PRINTER_MODEL=$(echo "$PRINTER_JSON" | python3 -c "import json, sys; print(json.load(sys.stdin).get('model', ''))" 2>/dev/null) || PRINTER_MODEL=""
 STAMPED_IMAGE="/tmp/stamped-${PRINTER_ID}.png"
@@ -198,32 +189,26 @@ python3 /app/stamp_image.py "$IMAGE_ORIG" "$STAMPED_IMAGE" "$PRINTER_NAME" "$PRI
     IMAGE="$IMAGE_ORIG"
 }
 
-log "Printer: $PRINTER_NAME ($CUPS_NAME) | Image: $TEST_IMAGE_ID"
+log "Printer: $PRINTER_NAME ($CUPS_NAME) | Image: $TEST_IMAGE_ID | Paper type: ${MEDIA_TYPE:-printer default}"
 
-# ── Check if scheduling is paused ────────────────────────────────
-if [ "$FORCE" = false ] && [ "$IS_PAUSED" = "True" ]; then
-    log "Schedule is PAUSED — skipping. Use dashboard to resume."
-    exit 0
-fi
-
-# ── Smart skip: check if printer had a recent job ────────────────
-if [ "$FORCE" = false ]; then
-    SKIP_SECONDS=$((SKIP_HOURS * 3600))
-    NOW=$(epoch_now)
-
-    LAST_JOB_TIME=$(lpstat -W completed -o "$CUPS_NAME" 2>/dev/null | tail -n 1 | grep -oE '[0-9]{2} [A-Za-z]+ [0-9]{4} [0-9]{2}:[0-9]{2}' | head -1) || true
-
-    if [ -n "$LAST_JOB_TIME" ]; then
-        LAST_JOB_EPOCH=$(date -d "$LAST_JOB_TIME" '+%s' 2>/dev/null) || LAST_JOB_EPOCH=0
-        ELAPSED=$((NOW - LAST_JOB_EPOCH))
-        if [ "$ELAPSED" -lt "$SKIP_SECONDS" ]; then
-            HOURS_AGO=$((ELAPSED / 3600))
-            log "SKIPPED: Active ${HOURS_AGO}h ago (within ${SKIP_HOURS}h window)."
-            write_status "ok" "Skipped — active ${HOURS_AGO}h ago"
-            write_history "skipped" "Active ${HOURS_AGO}h ago (threshold: ${SKIP_HOURS}h)"
-            exit 0
-        fi
+# ── Smart skip: printer used recently with the same black ink? ────
+# Looks at the printer's own completed-job list (prints from PCs/phones) and
+# at other entries for the same printer here, matching plain vs photo paper.
+if [ "$FORCE" = false ] && [ "${SKIP_HOURS:-0}" -gt 0 ] 2>/dev/null; then
+    ACTIVITY=$($STATE activity "$PRINTER_ID" 2>/dev/null) || ACTIVITY="0|"
+    ACT_EPOCH="${ACTIVITY%%|*}"
+    ACT_DESC="${ACTIVITY#*|}"
+    [[ "$ACT_EPOCH" =~ ^[0-9]+$ ]] || ACT_EPOCH=0
+    ELAPSED=$(( $(epoch_now) - ACT_EPOCH ))
+    if [ "$ACT_EPOCH" -gt 0 ] && [ "$ELAPSED" -lt $(( SKIP_HOURS * 3600 )) ]; then
+        HOURS_AGO=$((ELAPSED / 3600))
+        log "SKIPPED: used ${HOURS_AGO}h ago — $ACT_DESC (within ${SKIP_HOURS}h window)."
+        write_status "ok" "Skipped — used ${HOURS_AGO}h ago"
+        write_history "skipped" "Used ${HOURS_AGO}h ago: $ACT_DESC"
+        mark_maintained "activity" "$ACT_EPOCH"
+        exit 0
     fi
+    log "Recent use check: $ACT_DESC"
 fi
 
 # ── Pre-flight ──────────────────────────────────────────────────
@@ -286,8 +271,9 @@ fi
 log "Sending maintenance print..."
 
 attempt_print() {
-    /usr/bin/lp -d "$CUPS_NAME" \
+    /usr/bin/lp -d "$CUPS_NAME" -t "pbs-maintenance-$PRINTER_ID" \
         -o media="$PAPER_SIZE" \
+        "${MEDIA_OPTS[@]}" \
         -o fit-to-page \
         -o orientation-requested=3 \
         "$IMAGE" 2>&1
@@ -373,6 +359,7 @@ case "$FINAL_STATUS" in
     completed)
         write_status "ok" "Print completed successfully"
         write_history "ok" "Print completed"
+        mark_maintained "print"
         COMPLETED_EVENT=print_completed
         if [ "$PRIOR_FAILURES" -ge "$FAILURE_ALERT_THRESHOLD" ]; then
             COMPLETED_EVENT=print_recovered
@@ -380,14 +367,15 @@ case "$FINAL_STATUS" in
         fi
         python3 /app/notify.py --event "$COMPLETED_EVENT" \
             --printer "$PRINTER_NAME" --printer-id "$PRINTER_ID" \
-            --message "Print completed successfully" 2>/dev/null || true
+            --message "Print completed successfully" 2>>"$LOG_FILE" || true
         ;;
     submitted)
         write_status "ok" "Print job submitted"
         write_history "ok" "Print job submitted"
+        mark_maintained "print"
         python3 /app/notify.py --event print_ok \
             --printer "$PRINTER_NAME" --printer-id "$PRINTER_ID" \
-            --message "Print job submitted" 2>/dev/null || true
+            --message "Print job submitted" 2>>"$LOG_FILE" || true
         ;;
     stopped)
         REASON="${STOP_REASON:-Job held/stopped — check printer (paper tray, ink, jam)}"
@@ -401,9 +389,10 @@ case "$FINAL_STATUS" in
     *)
         write_status "ok" "Print job submitted"
         write_history "ok" "Print job submitted"
+        mark_maintained "print"
         python3 /app/notify.py --event print_ok \
             --printer "$PRINTER_NAME" --printer-id "$PRINTER_ID" \
-            --message "Print job submitted" 2>/dev/null || true
+            --message "Print job submitted" 2>>"$LOG_FILE" || true
         ;;
 esac
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 ###############################################################################
-# test-suite.sh — Automated test suite for print-blockage-stopper
+# test-suite.sh — Automated test suite for NozzleWake
 #
 # Run on Unraid (or any Docker host with the printer accessible).
 #
@@ -14,7 +14,7 @@ set -uo pipefail
 PRINTER_IP="${1:-192.168.1.23}"
 CONTAINER="pbs-test"
 APPDATA="/mnt/user/appdata/pbs-test"
-IMAGE="abadrdh/print-blockage-stopper:latest"
+IMAGE="${IMAGE:-ghcr.io/khaoq/nozzlewake:latest}"
 DASHBOARD="http://localhost:8631"
 
 PASS=0
@@ -112,7 +112,7 @@ cleanup() {
 # ── Banner ───────────────────────────────────────────────────────
 
 bold "╔══════════════════════════════════════════════════════════╗"
-bold "║       print-blockage-stopper — Test Suite               ║"
+bold "║       NozzleWake — Test Suite                           ║"
 bold "╚══════════════════════════════════════════════════════════╝"
 echo ""
 echo "  Image:      $IMAGE"
@@ -384,18 +384,23 @@ if [ -n "$FAKE_ID" ]; then
         -H 'Origin: http://evil.com' -H 'Host: localhost:8631' -d '{}' "$DASHBOARD/api/queue/$FAKE_ID/cancel")" = "403"
 fi
 
-# 3.2 Duplicate IP rejected
+# 3.2 Same IP can be added again (second schedule, e.g. photo paper)
 DUP_RESP=$(curl -sf -X POST \
     -H "Content-Type: application/json" \
-    -d '{"ip":"10.99.99.99","name":"Duplicate"}' \
+    -d '{"ip":"10.99.99.99","name":"Duplicate","media_type":"photographic-glossy"}' \
     "$DASHBOARD/api/printers/add" 2>/dev/null)
-if echo "$DUP_RESP" | grep -qi "already exists"; then
-    green "  ✓ Duplicate IP rejected"
+DUP_ID=$(echo "$DUP_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('printer',{}).get('id',''))" 2>/dev/null) || DUP_ID=""
+if [ -n "$DUP_ID" ] && [ "$DUP_ID" != "$FAKE_ID" ]; then
+    green "  ✓ Same IP added as a second entry ($DUP_ID)"
     ((PASS++))
+    curl -sf -X POST -H "Content-Type: application/json" -d "{\"id\":\"$DUP_ID\"}" \
+        "$DASHBOARD/api/printers/remove" >/dev/null 2>&1 || true
 else
-    red "  ✗ Duplicate IP was not rejected"
+    red "  ✗ Could not add the same IP twice"
     ((FAIL++))
 fi
+check "Add printer: invalid paper type rejected (400)" test "$(code_of -X POST -H 'Content-Type: application/json' \
+    -d '{"ip":"10.99.99.98","media_type":"x; rm -rf /"}' "$DASHBOARD/api/printers/add")" = "400"
 
 # 3.3 Update printer name
 if [ -n "$FAKE_ID" ]; then
