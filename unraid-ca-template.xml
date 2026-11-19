@@ -28,6 +28,11 @@
   <Requires>Any network printer with IPP Everywhere support (usually any modern networked printer). Especially useful for pigment printers.</Requires>
   <Beta>false</Beta>
   <Changes>
+    ### 2.3.0
+    - Built-in ET-8500 maintenance pages: page 1 (plain paper: Matte Black, C, M, Y, Gray) and page 2 (Photo Black + Gray, A4 or 4x6), low ink coverage
+    - Rename button on each printer card
+    - Readable names for every paper type the printer reports; types that use Photo Black are marked
+    - Larger printer-info line on full-size test pages
     ### 2.2.0 (NozzleWake)
     - Renamed to NozzleWake; image now ghcr.io/khaoq/nozzlewake
     - Webhooks work with Discord, Slack and ntfy directly (no proxy needed); several URLs supported; real errors shown by the Test button and in the log

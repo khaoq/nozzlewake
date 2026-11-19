@@ -231,7 +231,7 @@ python3 /app/webui.py &
 NUM_PRINTERS=$(PBS_PRINTERS_FILE="$PRINTERS_FILE" python3 -c "import json, os; print(len(json.load(open(os.environ['PBS_PRINTERS_FILE'])).get('printers',[])))" 2>/dev/null) || NUM_PRINTERS=0
 
 log "============================================================"
-log " NozzleWake v2.2.0 is running"
+log " NozzleWake v2.3.0 is running"
 log " Dashboard:  http://localhost:8631"
 log " CUPS UI:    http://localhost:631"
 log " Printers:   $NUM_PRINTERS configured"

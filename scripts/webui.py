@@ -1689,7 +1689,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     <a href="/printers" target="_blank">CUPS Printer Status (port 631)</a>
   </div>
 
-  <div class="footer">NozzleWake v2.2.0</div>
+  <div class="footer">NozzleWake v2.3.0</div>
 </div>
 <div class="toast-container" id="toastContainer"></div>
 

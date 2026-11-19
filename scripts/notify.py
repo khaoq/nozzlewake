@@ -103,7 +103,7 @@ def parse_webhook_urls(value):
 
 # Discord and Cloudflare reject urllib's default "Python-urllib/x.y" agent (HTTP 403,
 # error 1010), so always identify ourselves.
-USER_AGENT = "NozzleWake/2.2"
+USER_AGENT = "NozzleWake/2.3"
 
 EVENT_LABELS = {
     "print_completed": ("\u2705", "Print completed"),

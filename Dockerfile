@@ -5,6 +5,7 @@
 # healthy by sending a small test print on a schedule. Supports multiple
 # printers, mDNS discovery, custom test images, and a web dashboard.
 #
+# v2.3: Built-in ET-8500 maintenance pages, rename button, readable paper types
 # v2.2: Native Discord/Slack/ntfy webhooks, paper type per entry, interval schedules,
 #       real-use detection via the printer's job history, low-ink alerts
 ###############################################################################
